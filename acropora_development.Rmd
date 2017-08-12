@@ -1,0 +1,141 @@
+---
+title: "acropora_development"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r prepare_data}
+library(tidyverse)
+library(stringr)
+
+count_data <- read_rds("raw_data/acropora_count_data.rds")
+count_metadata <- read_rds("raw_data/acropora_count_metadata.rds")
+sample_table <- read_rds("raw_data/acropora_sample_table.rds")
+
+
+```
+
+We filter genes with low counts, requiring 5 or more reads in at least 2 samples per treatment. In this case treatment is a combination of mother and time stage across all stages. Later we might want to recompute this list when comparing specific subsets of stages. The tanks are considered technical replicates.
+
+```{r filter_low}
+low_counts_rows <- function(count_data,sample_table){
+  design <- model.matrix(~ 0 + Stage:Mother,data=sample_table)
+  counts_enough <- count_data >= 5
+  n_summaries <- t(apply(counts_enough,1,function(row){colSums(design*row)}))
+  bad_rows <- which(rowSums(n_summaries > 1) <= 1)
+#  good_rows <- which(rowSums(n_summaries > 1) > 1)
+  bad_rows
+}
+
+count_data_high <- round(count_data[-low_counts_rows(count_data,sample_table),])
+count_metadata_high <- count_metadata[-low_counts_rows(count_data,sample_table),]
+```
+
+```{r pca_noscale}
+pca.out <- prcomp(count_data_high, scale. = TRUE)
+
+pca.rot <- as.data.frame(pca.out$rotation)
+
+pca_plotdata <- cbind(pca.rot,sample_table)
+
+label_data <- pca_plotdata %>% group_by(Stage) %>% summarise_all(first)
+
+g_pca <- ggplot(pca_plotdata,aes(x=PC1,y=PC2)) + 
+  geom_point(aes(color=reorder(Stage,hpf)),size=5) + 
+  labs(color="Stage") + 
+  theme(legend.title = element_blank()) +
+  theme(axis.text = element_text(size=20)) + 
+  theme(axis.title = element_text(size=24)) + 
+  theme(legend.text = element_text(size=18)) +
+  geom_label(data=label_data,aes(label=Stage))
+
+ggsave(g_pca,filename = "figures/acropora_pca.png",width=14)
+
+pc_var_explained <- data.frame(x=1:148,y=cumsum(pca.out$sdev^2))
+
+#ggplot(pc_var_explained,aes(x=x,y=y/148)) + geom_line() + xlim(0,3)
+
+percent_explained <- pca.out$sdev^2/148
+
+```
+
+
+```{r}
+raw_data <- read_rds("raw_data/acropora_plottable_data_long.rds")
+
+wide_data <- raw_data %>% select(condition,log2FC,GeneID) %>% spread(condition,log2FC) 
+
+pca2 <- prcomp(as.matrix(wide_data[,-1]))
+
+pca2.rot <- as.data.frame(pca2$rotation)
+
+pca2_plotdata <- as.data.frame(pca2.rot) %>% rownames_to_column("condition") %>% mutate(Stage=str_extract(condition,"[^_]+"))%>% left_join(sample_table %>% group_by(Stage) %>% summarise_all(first),by="Stage")
+
+
+label_data2 <- pca2_plotdata %>% group_by(Stage) %>% summarise_all(first)
+
+library(ggrepel)
+
+g2_pca <- ggplot(pca2_plotdata,aes(x=PC1,y=PC2)) + 
+  geom_point(aes(color=reorder(Stage,hpf)),size=5) + 
+  labs(color="Stage") + 
+  guides(color=FALSE) +  
+  theme(legend.title = element_blank()) +
+  theme(axis.text = element_text(size=20)) + 
+  theme(axis.title = element_text(size=24)) + 
+  theme(legend.text = element_text(size=18)) +
+  geom_label_repel(data=label_data2,aes(label=Stage))
+
+ggsave(g2_pca,filename = "figures/acropora_pca2.png",width=14)
+
+pc_var_explained <- data.frame(x=1:52,y=cumsum(pca2$sdev^2))
+
+#ggplot(pc_var_explained,aes(x=x,y=y/148)) + geom_line() + xlim(0,3)
+
+percent_explained <- pca2$sdev^2/(sum(pca2$sdev^2))
+
+
+g23_pca <- ggplot(pca2_plotdata,aes(y=PC2,x=PC3)) + 
+  geom_point(aes(color=reorder(Stage,hpf)),size=5) + 
+  labs(color="Stage") + 
+  guides(color=FALSE) +
+  theme(legend.title = element_blank()) +
+  theme(axis.text = element_text(size=20)) + 
+  theme(axis.title = element_text(size=24)) + 
+  theme(legend.text = element_text(size=18)) +
+  geom_label_repel(data=label_data2,aes(label=Stage))
+
+#source("http://peterhaschke.com/Code/multiplot.R")
+
+png("figures/acropora_multiplot.png", width = 1000)
+multiplot(plotlist=list(g2_pca,g23_pca),cols=2)
+dev.off()
+```
+
+```{r heatmap}
+library(ComplexHeatmap)
+
+hm_data <- wide_data %>% remove_rownames() %>% column_to_rownames("GeneID")
+
+condition_info <- raw_data %>% select(Stage,condition,hpf,Mother) %>% unique()
+column_order <- match(condition_info %>% arrange(hpf,Mother) %>% pull(condition),colnames(hm_data))
+
+rrows <- c(1,20:24,2,5,4,3,15:19)
+
+rrows <- c(10:40)
+
+uc20 <- Heatmap(hm_data[rrows,column_order],cluster_rows = FALSE, cluster_columns = FALSE)
+rc20 <- Heatmap(hm_data[rrows,column_order],cluster_rows = TRUE, cluster_columns = FALSE,row_dend_width = unit(50, "mm"))
+rc20_cd <- Heatmap(hm_data[rrows,column_order],cluster_rows = TRUE, cluster_columns = FALSE,clustering_method_rows = "complete",row_dend_width = unit(100, "mm"),show_row_names = FALSE)
+
+rc20_cd_av <- Heatmap(hm_data[rrows,column_order],cluster_rows = TRUE, cluster_columns = FALSE,clustering_method_rows = "average",row_dend_width = unit(100, "mm"),show_row_names = FALSE)
+
+
+rc20_km10 <- Heatmap(hm_data[rrows,column_order],cluster_rows = FALSE, cluster_columns = FALSE, km = 10,,row_dend_width = unit(100, "mm"), show_row_names = FALSE, km_title = "%i")
+rcc20 <- Heatmap(hm_data[rrows,column_order],cluster_rows = TRUE, cluster_columns = TRUE)
+
+```

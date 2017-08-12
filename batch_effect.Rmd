@@ -1,0 +1,47 @@
+---
+title: "batch_effect"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+
+all_data <- read_rds("raw_data/hypothermia_data.rds")
+
+y <- all_data$y
+colnames(y) <- str_extract(colnames(y),"([1-9]+[0-9]*)")
+samples <- all_data$patient_data
+
+log_y <- log2(y)
+
+log_y_nomiss <- na.omit(log_y)
+
+pca <- prcomp(log_y_nomiss)
+
+pca_plot_data <- cbind(pca$rotation,samples) %>% mutate(is_first_batch = between(Random_sample_number,1,65))
+
+gg1 <- ggplot(pca_plot_data,aes(x=PC1,y=PC2)) + 
+  geom_text(aes(label=Random_sample_number),size=5)  +
+  theme(axis.text = element_text(size=20)) + 
+  theme(axis.title = element_text(size=24)) + 
+  theme(legend.text = element_text(size=18)) 
+
+gg2 <- ggplot(pca_plot_data,aes(x=PC1,y=PC2)) + 
+  # geom_point(aes(color=is_first_batch),size=5) +
+  geom_text(aes(label=Random_sample_number,color=is_first_batch), size=5) + 
+  scale_color_discrete(name="Batch",labels=c("Last 66","First 65")) +
+  theme(axis.text = element_text(size=20)) + 
+  theme(axis.title = element_text(size=24)) + 
+  theme(legend.text = element_text(size=18)) 
+
+
+ggsave(gg1,filename = "figures/batch1.png",width=12)
+ggsave(gg2,filename = "figures/batch2.png",width=12)
+
+```
